@@ -4,116 +4,108 @@ sys.path.append('../')
 import numpy as np
 import tinybrain as tb
 
-"""
-制造训练样本。根据均值170，标准差5的正态分布采样300个男性身高，根据均值160，
-标准差5的正态分布采样300个女性身高。根据均值120，标准差5的正态分布采样300个
-男性体重，根据均值100，标准差5的正态分布采样300个女性体重。
-构造300个1，作为男性标签，构造300个-1，作为女性标签。将数据组装成一个
-600 x 3的numpy数组，前2列分别是身高、体重，最后一列是性别标签。
-"""
-male_height = np.random.normal(190, 5, 300)
-female_height = np.random.normal(160, 5, 300)
+# 构造训练集
+male_heights = np.random.normal(171, 6, 500)
+female_heights = np.random.normal(158, 5, 500)
 
-male_weight = np.random.normal(60, 5, 300)
-female_weight = np.random.normal(50, 5, 300)
+male_weights = np.random.normal(70, 10, 500)
+female_weights = np.random.normal(57, 8, 500)
 
-male_label = [1] * 300
-female_label = [-1] * 300
+male_bfrs = np.random.normal(16, 2, 500)
+female_bfrs = np.random.normal(22, 2, 500)
 
-train_set = np.array([np.concatenate((male_height, female_height)),
-                    np.concatenate((male_weight, female_weight)),
-                    np.concatenate((male_label, female_label))]).T
+male_labels = [1] * 500
+female_labels = [-1] * 500
 
+train_set = np.array([np.concatenate((male_heights, female_heights)),
+                      np.concatenate((male_weights, female_weights)),
+                      np.concatenate((male_bfrs, female_bfrs)),
+                      np.concatenate((male_labels, female_labels))]).T
+
+# 随机打乱样本顺序
 np.random.shuffle(train_set)
 
+# 批大小
 batch_size = 10
 
-# 构造计算图，输入向量为一个batch_size×2的矩阵（代表），不需要初始化，不参与训练
-x = tb.core.Variable(dim=(batch_size,2), init=False, trainable=False)
+# batch_size x 3矩阵，每行保存一个样本，整个节点保存一个mini batch的样本
+X = tb.core.Variable(dim=(batch_size, 3), init=False, trainable=False)
 
-# 类别标签，1男，-1女
-label = tb.core.Variable(dim=(batch_size,1), init=False, trainable=False)
+# 保存一个mini batch的样本的类别标签
+label = tb.core.Variable(dim=(batch_size, 1), init=False, trainable=False)
 
-# 权重向量，2×1的向量，需要初始化，参与训练
-w = tb.core.Variable(dim=(2,1), init=True, trainable=True)
+# 权值向量，3x1矩阵
+w = tb.core.Variable(dim=(3, 1), init=True, trainable=True)
 
-# 阈值，是一个1x1矩阵，需要初始化，参与训练
+# 阈值
 b = tb.core.Variable(dim=(1, 1), init=True, trainable=True)
 
-# 全1的向量，维数为batch_size，不可训练
+# 全1向量，维数是batch_size，不可训练
 ones = tb.core.Variable(dim=(batch_size, 1), init=False, trainable=False)
-ones.set_value(np.mat(np.ones(batch_size)).T) 
+ones.set_value(np.mat(np.ones(batch_size)).T)
 
-# 用阈值标量乘全1的向量
+# 用阈值（标量）乘以全1向量
 bias = tb.ops.ScalarMultiply(b, ones)
 
-# 预测
-output = tb.ops.Add(tb.ops.MatMul(x, w), bias)
-pred = tb.ops.Step(output)
+# 对一个mini batch的样本计算输出
+output = tb.ops.Add(tb.ops.MatMul(X, w), bias)
+predict = tb.ops.Step(output)
 
-# 一个mini-batch的损失函数
-loss = tb.ops.PerceptionLoss(tb.ops.Multiply(label, output))
+# 一个mini batch的样本的损失函数
+loss = tb.ops.loss.PerceptionLoss(tb.ops.Multiply(label, output))
 
-# 一个mini-batch的平均损失
-B = tb.core.Variable(dim=(1, batch_size), init=False, trainable=False)
+# 一个mini batch的平均损失
+B =  tb.core.Variable(dim=(1, batch_size), init=False, trainable=False)
 B.set_value(1 / batch_size * np.mat(np.ones(batch_size)))
 mean_loss = tb.ops.MatMul(B, loss)
 
-lr = 0.0001
+# 学习率
+learning_rate = 0.0001
 
+# 训练
 for epoch in range(50):
-    # 遍历所有训练集中的数据
-    for i in range(0, len(train_set), batch_size):
-        # 构造mini-batch特征矩阵
-        features = np.mat(train_set[i:i + batch_size, :-1]).T
-        
-        l = np.mat(train_set[i, -1])
-        
-        # 将特征赋给x节点，将标签赋给label节点
-        x.set_value(features)
+
+    # 遍历训练集中的样本
+    for i in np.arange(0, len(train_set), batch_size):
+
+        # 取一个mini batch的样本的特征
+        features = np.mat(train_set[i:i + batch_size, :-1])
+
+        # 取一个mini batch的样本的标签
+        l = np.mat(train_set[i:i + batch_size, -1]).T
+
+        # 将特征赋给X节点，将标签赋给label节点
+        X.set_value(features)
         label.set_value(l)
 
-        # 在loss节点上执行前向传播，计算损失值
-        loss.forward()
+        # 在平均损失节点上执行前向传播
+        mean_loss.forward()
 
-        # 在w和b节点上执行反向传播，计算损失值对它们的雅可比矩阵
-        w.backward(loss)
-        b.backward(loss)
-        """
-        用损失值对w和b的雅可比矩阵（梯度的转置）更新参数值。最终结果节点对
-        变量节点的雅可比矩阵的形状都是1 x n。这个雅可比的转置是结果节点对
-        变量节点的梯度。将梯度再reshape成变量矩阵的形状，对应位置上就是结
-        果节点对变量元素的偏导数。将改变形状后的梯度乘上学习率，从当前变量
-        值中减去，再赋值给变量节点，完成梯度下降更新。
-        """
-        w.set_value(w.value - lr * w.jacobi.T.reshape(w.shape()))
-        b.set_value(b.value - lr * b.jacobi.T.reshape(b.shape()))
+        # 在参数节点上执行反向传播
+        w.backward(mean_loss)
+        b.backward(mean_loss)
 
-        # 清除图中所有节点的雅可比矩阵
+        # 更新参数
+        w.set_value(w.value - learning_rate * w.jacobi.T.reshape(w.shape()))
+        b.set_value(b.value - learning_rate * b.jacobi.T.reshape(b.shape()))
+
         tb.core.default_graph.clear_jacobi()
 
-    # 每个epoch后评价模型的准确率
-    pred_list = []
+    # 每个epoch结束后评价模型的正确率
+    pred = []
 
-    for i in range(len(train_set)):
-        features = np.mat(train_set[i,:-1]).T
-        x.set_value(features)
+    # 遍历训练集，计算当前模型对每个样本的预测值
+    for i in np.arange(0, len(train_set), batch_size):
+
+        features = np.mat(train_set[i:i + batch_size, :-1])
+        X.set_value(features)
+
+        # 在模型的predict节点上执行前向传播
+        predict.forward()
         
-        pred.forward()
-        pred_list.append(pred.value[0, 0]) # pred为二维矩阵
-    
-    pred_list = np.array(pred_list) * 2 - 1  # 将1/0结果转化成1/-1结果，好与训练标签的约定一致
-    
-    acc = (train_set[:, -1] == pred_list).astype(np.int).sum() / len(train_set)
+        # 当前模型对一个mini batch的样本的预测结果
+        pred.extend(predict.value.A.ravel())
 
-    # 打印当前epoch数和模型在训练集上的正确率
-    print("epoch: {:d}, accuracy: {:.3f}".format(epoch + 1, acc))
-
-
-
-
-
-
-        
-
-
+    pred = np.array(pred) * 2 - 1
+    accuracy = (train_set[:, -1] == pred).astype(np.int).sum() / len(train_set)
+    print("epoch: {:d}, accuracy: {:.3f}".format(epoch + 1, accuracy))
