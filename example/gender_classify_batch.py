@@ -14,7 +14,7 @@ import tinybrain as tb
 male_height = np.random.normal(190, 5, 300)
 female_height = np.random.normal(160, 5, 300)
 
-male_weight = np.random.normal(80, 5, 300)
+male_weight = np.random.normal(60, 5, 300)
 female_weight = np.random.normal(50, 5, 300)
 
 male_label = [1] * 300
@@ -26,32 +26,46 @@ train_set = np.array([np.concatenate((male_height, female_height)),
 
 np.random.shuffle(train_set)
 
-# 构造计算图，输入向量为一个2×1的矩阵（代表），不需要初始化，不参与训练
-x = tb.core.Variable(dim=(2,1), init=False, trainable=False)
+batch_size = 10
+
+# 构造计算图，输入向量为一个batch_size×2的矩阵（代表），不需要初始化，不参与训练
+x = tb.core.Variable(dim=(batch_size,2), init=False, trainable=False)
 
 # 类别标签，1男，-1女
-label = tb.core.Variable(dim=(1,1), init=False, trainable=False)
+label = tb.core.Variable(dim=(batch_size,1), init=False, trainable=False)
 
 # 权重向量，2×1的向量，需要初始化，参与训练
-w = tb.core.Variable(dim=(1,2), init=True, trainable=True)
+w = tb.core.Variable(dim=(2,1), init=True, trainable=True)
 
 # 阈值，是一个1x1矩阵，需要初始化，参与训练
 b = tb.core.Variable(dim=(1, 1), init=True, trainable=True)
 
+# 全1的向量，维数为batch_size，不可训练
+ones = tb.core.Variable(dim=(batch_size, 1), init=False, trainable=False)
+ones.set_value(np.mat(np.ones(batch_size)).T) 
+
+# 用阈值标量乘全1的向量
+bias = tb.ops.ScalarMultiply(b, ones)
+
 # 预测
-output = tb.ops.Add(tb.ops.MatMul(w, x), b)
+output = tb.ops.Add(tb.ops.MatMul(x, w), bias)
 pred = tb.ops.Step(output)
 
-# 损失函数
-loss = tb.ops.PerceptionLoss(tb.ops.MatMul(label, output))
+# 一个mini-batch的损失函数
+loss = tb.ops.PerceptionLoss(tb.ops.Multiply(label, output))
+
+# 一个mini-batch的平均损失
+B = tb.core.Variable(dim=(1, batch_size), init=False, trainable=False)
+B.set_value(1 / batch_size * np.mat(np.ones(batch_size)))
+mean_loss = tb.ops.MatMul(B, loss)
 
 lr = 0.0001
 
 for epoch in range(50):
     # 遍历所有训练集中的数据
-    for i in range(len(train_set)):
-        # 构造2x1特征矩阵
-        features = np.mat(train_set[i, :-1]).T
+    for i in range(0, len(train_set), batch_size):
+        # 构造mini-batch特征矩阵
+        features = np.mat(train_set[i:i + batch_size, :-1]).T
         
         l = np.mat(train_set[i, -1])
         

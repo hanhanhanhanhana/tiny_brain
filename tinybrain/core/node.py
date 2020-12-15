@@ -1,9 +1,11 @@
 import numpy as np
 import abc
+from .graph import default_graph
 
-class Node(object):
+class Node():
     """
     计算图节点基类
+    parents: 构建图节点时的输入，如MatMul(list_x, list_y)，则parents则为tuple(list_x, list_y)
     """
     def __init__(self, *parents, **kargs):
         # 计算图对象，若无则默认为全局对象default_graph
@@ -11,12 +13,12 @@ class Node(object):
         self.need_save = kargs.get('need_save', True)
         self.gen_node_name(**kargs)
 
-        self.parents = list(parents)
+        self.parents = list(parents) #搭建图时，已知父节点，未知子节点
         self.children = []
         self.value = None # 本节点的值
         self.jacobi = None # 结果节点对本节点的雅可比矩阵
 
-        # 将本节点添加到父节点的子节点列表中
+        # 搭建图时，将本节点添加到父节点的子节点列表中
         for parent in parents:
             parent.children.append(self)
 
@@ -68,18 +70,20 @@ class Node(object):
 
     def backward(self, result):
         """
-        反向传播，计算结果节点对本节点的雅可比矩阵，result是最终的结果节点。
+        反向传播，计算结果节点对本节点的雅可比矩阵，result是最终的结果节点。（一般情况下，最终结果result是一个标量-损失值，
+        它对计算路径上游某个节点的雅可比矩阵是1×n的矩阵，n为该节点的维数，这个1×n的雅可比矩阵就是最终结果对该节点的梯度的转置）
         若本节点是最终的结果节点，那么只需要构造一个适当形状的单位矩阵作为雅克比矩阵即可；
         若不是，则首先构造一个适当形状的全零矩阵作为累加器，再遍历其全部子节点，
         若子节点value不为None，说明它在此计算路径上，递归调用子节点的backward，获得结果节点对它的雅克比矩阵，
         然后通过get_jacobi得到子节点对自己节点的雅克比矩阵，相乘累加，
         当子节点遍历完成后，累加器的值就是最终结果对本节点的雅克比矩阵。
+        反向传播向父节点传递的二元组为：最终结果对自己的雅克比矩阵以及自己对父节点的雅可比矩阵。
         """
         if self.jacobi is None:
             if self is result:
                 self.jacobi = np.mat(np.eye(self.dimension()))
             else:
-                self.jacobi = np.mat(np.zeros((result.dimension, self.dimension())))
+                self.jacobi = np.mat(np.zeros((result.dimension(), self.dimension())))
             for child in self.get_children():
                 if child.value is not None:
                     self.jacobi += child.backward(result) * child.get_jacobi(self)
@@ -115,6 +119,7 @@ class Node(object):
 class Variable(Node):
     """
     变量节点
+    TODO: 并未实现基类的compute与get_jacobi
     """
     def __init__(self, dim, init=False, trainable=True, **kargs):
         """
