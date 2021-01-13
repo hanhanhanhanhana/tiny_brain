@@ -1,5 +1,6 @@
 import numpy as np
 from ..core import Node
+import numpy as np
 
 def fill_diagonal(to_be_filled, filler):
     """
@@ -65,13 +66,13 @@ class Step(Operator):
     def compute(self):
         """
         阶跃函数，当矩阵中值大于等于0.0时为1.0，否则为0.0
-        TODO: 为什么是parents[0]
         """
         self.value = np.mat(np.where(self.parents[0].value >= 0.0, 1.0, 0.0))
     
     def get_jacobi(self, parent):
         """
         TODO: 没搞懂
+        TODO:目前该节点未反传
         """
         np.mat(np.eye(self.dimension()))
         return np.zeros(np.where(self.parents[0].value.A1 >= 0.0, 0.0, -1.0))
@@ -111,3 +112,213 @@ class Multiply(Operator):
             return np.diag(self.parents[1].value.A1)
         else:
             return np.diag(self.parents[0].value.A1)
+
+class Logistic(Operator):
+    """
+    对向量的分量施加Logistic函数
+    """
+
+    def compute(self):
+        x = self.parents[0].value
+        # 对父节点的每个分量都做logistic
+        self.value = np.mat(1.0 / (1.0 + np.power(np.e, np.where(-x > 1e2, 1e2, -x))))
+
+    def get_jacobi(self, parent):
+        """
+        TODO:目前该节点未反传
+        logistic类节点对父节点的每个元素都执行logistic函数，其对父节点的雅克比矩阵为对角阵，其对角
+        元素为logistic函数对父节点每个对应位置的导数
+        """
+        return np.diag(np.mat(np.multiply(self.value, 1 - self.value)).A1)
+
+class SoftMax(Operator):
+
+    @staticmethod
+    def softmax(a):
+        a[a > 1e2] = 1e2 
+        ep = np.power(np.e, a)
+        return ep / np.sum(ep)
+    
+    def compute(self):
+        self.value = SoftMax.softmax(self.parents[0].value)
+
+    def get_jacobi(self, parent):
+        """
+        不实现SoftMax节点的get_jacobi函数，
+        训练时使用CrossEntropyWithSoftMax节点
+        """
+        raise NotImplementedError("Don't use SoftMax's get_jacobi")
+
+class ReLU(Operator):
+    """
+    对矩阵中的每个元素施加ReLU函数
+    """
+    nslope = 0.1 # 负半轴的斜率
+    def compute(self):
+        self.value = np.mat(np.where(
+            self.parents[0].value > 0.0, self.parents[0].value, self.parents[0].value*self.nslope))
+    
+    def get_jacobi(self, parent):
+        return np.diag(np.where(self.parents[0].value.A1 > 0.0, 1.0, self.nslope)) 
+
+class Convolve(Operator):
+    
+    def __init__(self, *parents, **kargs):
+        assert len(parents) == 2
+        Operator.__init__(self, *parents, **kargs)
+
+        self.padded = None
+    
+    def compute(self):
+        data = self.parents[0].value #图像
+        kernel = self.parents[1].value
+
+        w, h = data.shape
+        kw, kh = kernel.shape
+        hkw, hkh = int(kw / 2), int(kh / 2) # 宽长各一侧padding的大小
+
+        # padding
+        pw, ph = np.add((w, h), np.multiply((hkw, hkh), 2))
+        self.padded = np.mat(np.zeros((pw, ph)))
+        self.padded[hkw:hkw+w, hkh:hkh+h] = data
+
+        self.value = np.mat(np.zeros((w, h)))
+
+        # 二维离散卷积，长宽各平移h和w次，i和j各代表self.padded中原始数据的起始索引
+        for i in np.arange(hkw, hkw+w):
+            for j in np.arange(hkh, hkh+h):
+                self.value[i - hkw, j - hkh] = np.sum(
+                    np.multiply(self.padded[i - hkw:i - hkw + kw, j - hkh:j - hkh + kh], kernel))
+    
+    def get_jacobi(self, parent):
+        data = self.parents[0].value #图像
+        kernel = self.parents[1].value
+
+        w, h = data.shape
+        kw, kh = kernel.shape
+        hkw, hkh = int(kw / 2), int(kh / 2) # 宽长各一侧padding的大小
+        
+        # padding
+        pw, ph = np.add((w, h), np.multiply((hkw, hkh), 2)) 
+
+        jacobi = []
+        if parent is self.parents[0]:
+            for i in np.arange(hkw, hkw+w):
+                for j in np.arange(hkh, hkh+h):
+                    mask = np.mat(np.zeros((pw, ph)))
+                    mask[i - hkw:i - hkw + kw, j - hkh:j - hkh + kh] = kernel
+                    jacobi.append(mask[hkw:hkw+w, hkh:hkh+h].A1)
+        elif parent is self.parents[1]:
+            for i in np.arange(hkw, hkw+w):
+                for j in np.arange(hkh, hkh+h):
+                    jacobi.append(self.padded[i - hkw:i - hkw + kw, j - hkh:j - hkh + kh].A1)
+        else:
+            raise Exception('more than one father')
+
+        return np.mat(jacobi)
+
+class MaxPooling(Operator):
+    """
+    TODO: 未理解
+    最大值池化
+    """
+
+    def __init__(self, *parent, **kargs):
+        Operator.__init__(self, *parent, **kargs)
+
+        self.stride = kargs.get('stride')
+        assert self.stride is not None
+        self.stride = tuple(self.stride)
+        assert isinstance(self.stride, tuple) and len(self.stride) == 2
+
+
+        self.size = kargs.get('size')
+        assert self.size is not None
+        self.size = tuple(self.size)
+        assert isinstance(self.size, tuple) and len(self.size) == 2
+
+        self.flag = None
+
+    def compute(self):
+        data = self.parents[0].value  # 输入特征图
+        w, h = data.shape  # 输入特征图的宽和高
+        dim = w * h
+        sw, sh = self.stride
+        kw, kh = self.size  # 池化核尺寸
+        hkw, hkh = int(kw / 2), int(kh / 2)  # 池化核长宽的一半
+
+        result = []
+        flag = []
+
+        for i in np.arange(0, w, sw):
+            row = []
+            for j in np.arange(0, h, sh):
+                # 取池化窗口中的最大值
+                top, bottom = max(0, i - hkw), min(w, i + hkw + 1)
+                left, right = max(0, j - hkh), min(h, j + hkh + 1)
+                window = data[top:bottom, left:right]
+                row.append(
+                    np.max(window)
+                )
+
+                # 记录最大值在原特征图中的位置
+                pos = np.argmax(window)
+                w_width = right - left
+                offset_w, offset_h = top + pos // w_width, left + pos % w_width
+                offset = offset_w * w + offset_h
+                tmp = np.zeros(dim)
+                tmp[offset] = 1
+                flag.append(tmp)
+
+            result.append(row)
+
+        self.flag = np.mat(flag)
+        self.value = np.mat(result)
+
+    def get_jacobi(self, parent):
+
+        assert parent is self.parents[0] and self.jacobi is not None
+        return self.flag
+    
+class Concat(Operator):
+    """
+    TODO
+    将多个父节点的值连接成向量
+    """
+
+    def compute(self):
+        assert len(self.parents) > 0
+
+        # 将所有父节点矩阵展平并连接成一个向量
+        self.value = np.concatenate(
+            [p.value.flatten() for p in self.parents],
+            axis=1
+        ).T
+
+    def get_jacobi(self, parent):
+        assert parent in self.parents
+
+        dimensions = [p.dimension() for p in self.parents]  # 各个父节点的元素数量
+        pos = self.parents.index(parent)  # 当前是第几个父节点
+        dimension = parent.dimension()  # 当前父节点的元素数量
+
+        assert dimension == dimensions[pos]
+
+        jacobi = np.mat(np.zeros((self.dimension(), dimension)))
+        start_row = int(np.sum(dimensions[:pos]))
+        jacobi[start_row:start_row + dimension,
+               0:dimension] = np.eye(dimension)
+
+        return jacobi
+
+
+
+
+        
+
+
+
+
+
+
+

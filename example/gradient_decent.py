@@ -5,10 +5,10 @@ import numpy as np
 import tinybrain as tb
 
 male_height = np.random.normal(190, 5, 300)
-female_height = np.random.normal(160, 5, 300)
+female_height = np.random.normal(140, 5, 300)
 
 # 当male与female的weight差距不大时，模型不能分辨
-male_weight = np.random.normal(80, 5, 300) 
+male_weight = np.random.normal(100, 5, 300) 
 female_weight = np.random.normal(50, 5, 300)
 
 male_label = [1] * 300
@@ -36,7 +36,7 @@ b = tb.core.Variable(dim=(1, 1), init=True, trainable=True)
 output = tb.ops.Add(tb.ops.MatMul(w, x), b)
 predict = tb.ops.Step(output)
 
-# 损失函数
+# 损失函数，使用的是output节点
 loss = tb.ops.loss.PerceptionLoss(tb.ops.MatMul(label, output))
 
 # 学习率

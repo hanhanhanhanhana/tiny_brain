@@ -43,7 +43,7 @@ output = tb.ops.Add(tb.ops.MatMul(w, x), b)
 pred = tb.ops.Step(output)
 
 # 损失函数
-loss = tb.ops.PerceptionLoss(tb.ops.MatMul(label, output))
+loss = tb.ops.loss.PerceptionLoss(tb.ops.MatMul(label, output))
 
 lr = 0.0001
 
